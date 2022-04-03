@@ -75,7 +75,7 @@ inline T & Cache<Key, KeyProvider, Allocator>::get(const Key & key)
 template <class Key, class KeyProvider, class Allocator>
 inline std::ostream & Cache<Key, KeyProvider, Allocator>::print(std::ostream & strm) const
 {
-    for (auto i : m_data) {
+    for (const auto & i : m_data) {
         strm << *i.first;
         if (i.first != m_data.back().first) {
             strm << " ";
