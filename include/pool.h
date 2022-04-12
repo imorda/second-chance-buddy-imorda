@@ -7,54 +7,32 @@
 struct Node
 {
     Node * parent = nullptr;
+    virtual ~Node();
+
+    Node();
+
+    Node(Node *);
+};
+
+struct Internal : Node
+{
     Node * left = nullptr;
     Node * right = nullptr;
 
-    ~Node();
+    virtual ~Internal();
 
-    Node() = default;
-
-    Node(Node * _parent)
-        : parent(_parent)
-    {
-    }
+    Internal();
 };
 
 struct Leaf : Node
 {
     bool used;
 
-    Leaf(bool used)
-        : used(used)
-    {
-    }
+    virtual ~Leaf();
 
-    Leaf(bool used, Node * _parent)
-        : Node(_parent)
-        , used(used)
-    {
-    }
+    Leaf(bool);
+    Leaf(bool, Node *);
 };
-
-inline Node::~Node()
-{
-    if (left != nullptr) {
-        if (left->left == nullptr && left->right == nullptr) {
-            delete static_cast<Leaf *>(left);
-        }
-        else {
-            delete left;
-        }
-    }
-    if (right != nullptr) {
-        if (right->left == nullptr && right->right == nullptr) {
-            delete static_cast<Leaf *>(right);
-        }
-        else {
-            delete right;
-        }
-    }
-}
 
 struct Block
 {
@@ -66,17 +44,9 @@ struct Block
 class PoolAllocator
 {
 public:
-    PoolAllocator(const unsigned min_p, const unsigned max_p)
-        : m_min_p(min_p)
-        , m_storage(1UL << max_p)
-        , m_block_map_root{new Leaf(false), max_p, 0}
-    {
-    }
+    PoolAllocator(unsigned min_p, unsigned max_p);
 
-    ~PoolAllocator()
-    {
-        delete m_block_map_root.node;
-    }
+    ~PoolAllocator();
 
     void * allocate(std::size_t);
 
@@ -104,10 +74,5 @@ private:
             ++i;
         }
         return i;
-    }
-
-    static bool is_leaf(Node * node)
-    {
-        return node != nullptr && node->left == nullptr && node->right == nullptr;
     }
 };

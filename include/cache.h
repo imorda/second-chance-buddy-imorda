@@ -60,14 +60,15 @@ inline T & Cache<Key, KeyProvider, Allocator>::get(const Key & key)
     else {
         while (m_max_size == size()) {
             if (m_data.back().second) {
-                m_data.push_front({m_data.back().first, false});
+                m_data.back().second = false;
+                m_data.splice(m_data.begin(), m_data, --m_data.end());
             }
             else {
                 m_alloc.destroy(m_data.back().first);
+                m_data.pop_back();
             }
-            m_data.pop_back();
         }
-        m_data.push_front({m_alloc.template create<T>(key), false});
+        m_data.emplace_front(m_alloc.template create<T>(key), false);
         return static_cast<T &>(*m_data.front().first);
     }
 }

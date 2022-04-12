@@ -2,23 +2,52 @@
 
 #include <cassert>
 #include <functional>
+#include <stdexcept>
+
+Node::Node() = default;
+
+Node::Node(Node * _parent)
+    : parent(_parent)
+{
+}
+
+Node::~Node() = default;
+
+Leaf::Leaf(bool used)
+    : used(used)
+{
+}
+
+Leaf::Leaf(bool used, Node * _parent)
+    : Node(_parent)
+    , used(used)
+{
+}
+
+Leaf::~Leaf() = default;
+
+Internal::Internal() = default;
+
+Internal::~Internal()
+{
+    delete left;
+    delete right;
+}
 
 void * PoolAllocator::allocate(const std::size_t n)
 {
     const unsigned target_p = std::max(upper_bin_power(n), m_min_p);
     auto candidate = get_suitable_block(target_p, m_block_map_root); // Guarantees that candidate.node is Leaf
 
-    Leaf * canditate_leaf = static_cast<Leaf *>(candidate.node);
     unsigned power = candidate.power;
 
-    if (is_leaf(candidate.node)) {
+    Leaf * candidate_leaf = dynamic_cast<Leaf *>(candidate.node);
+    if (candidate_leaf != nullptr) {
         while (power > target_p) {
-            canditate_leaf = split_block(canditate_leaf);
+            candidate_leaf = split_block(candidate_leaf);
             power--;
         }
-        if (canditate_leaf != nullptr) {
-            canditate_leaf->used = true;
-        }
+        candidate_leaf->used = true;
         return &m_storage[candidate.offset];
     }
     throw std::bad_alloc{};
@@ -29,9 +58,9 @@ void PoolAllocator::deallocate(const void * ptr)
     auto b_ptr = static_cast<const std::byte *>(ptr);
 
     Block block = find_by_offset(b_ptr - &m_storage[0], m_block_map_root); // Guarantees that block.node is Leaf
-    Leaf * leaf = static_cast<Leaf *>(block.node);
+    Leaf * leaf = dynamic_cast<Leaf *>(block.node);
 
-    if (is_leaf(block.node)) {
+    if (leaf != nullptr) { // Needed to avoid warnings of nullptr dereference
         leaf->used = false;
 
         Leaf * new_leaf = leaf;
@@ -50,31 +79,28 @@ Block PoolAllocator::get_suitable_block(const unsigned k, Block current)
         return {nullptr, static_cast<unsigned>(-1), size_t_max_val};
     }
 
-    Leaf * leaf_cast = static_cast<Leaf *>(current.node);
-    if (is_leaf(current.node)) {
+    Leaf * leaf_cast = dynamic_cast<Leaf *>(current.node);
+    if (leaf_cast != nullptr) {
         if (leaf_cast->used) {
             return {nullptr, static_cast<unsigned>(-1), size_t_max_val};
         }
         return current;
     }
 
-    Block left = get_suitable_block(k, {current.node->left, current.power - 1, current.offset});
+    Internal * internal_cast = dynamic_cast<Internal *>(current.node);
 
-    if (left.power == k) {
-        return left;
+    if (internal_cast != nullptr) {
+        Block left = get_suitable_block(k, {internal_cast->left, current.power - 1, current.offset});
+
+        if (left.power == k) {
+            return left;
+        }
+
+        Block right = get_suitable_block(k, {internal_cast->right, current.power - 1, current.offset + (1UL << (current.power - 1))});
+
+        return left.power > right.power ? right : left;
     }
-
-    Block right = get_suitable_block(k, {current.node->right, current.power - 1, current.offset + (1UL << (current.power - 1))});
-
-    if (right.power == k) {
-        return right;
-    }
-
-    if (left.node != nullptr) {
-        return left;
-    }
-
-    return right;
+    throw std::logic_error("Got neither Leaf nor Node instance of Node");
 }
 
 Leaf * PoolAllocator::split_block(Leaf * leaf)
@@ -83,7 +109,7 @@ Leaf * PoolAllocator::split_block(Leaf * leaf)
         return nullptr;
     }
 
-    Node * new_parent = new Node{};
+    Internal * new_parent = new Internal{};
 
     Leaf * ans = new Leaf(false, new_parent);
     new_parent->left = ans;
@@ -94,11 +120,18 @@ Leaf * PoolAllocator::split_block(Leaf * leaf)
     }
     else {
         new_parent->parent = leaf->parent;
-        if (leaf->parent->left == leaf) {
-            leaf->parent->left = new_parent;
+
+        Internal * grandparent = dynamic_cast<Internal *>(leaf->parent);
+
+        if (grandparent == nullptr) {
+            throw std::logic_error("Got neither Leaf nor Node instance of Node");
+        }
+
+        if (grandparent->left == leaf) {
+            grandparent->left = new_parent;
         }
         else {
-            leaf->parent->right = new_parent;
+            grandparent->right = new_parent;
         }
     }
     delete leaf;
@@ -108,33 +141,39 @@ Leaf * PoolAllocator::split_block(Leaf * leaf)
 
 Leaf * PoolAllocator::try_merge_block(Leaf * node)
 {
-    if (node == nullptr || node->parent == nullptr) {
+    if (node == nullptr) {
         return node;
     }
 
-    Leaf * parent_left = static_cast<Leaf *>(node->parent->left);
-    Leaf * parent_right = static_cast<Leaf *>(node->parent->right);
+    Internal * parent = dynamic_cast<Internal *>(node->parent);
 
-    if (!is_leaf(node->parent->left) || !is_leaf(node->parent->right) || parent_left->used || parent_right->used) {
+    if (parent == nullptr) {
         return node;
     }
 
-    Node * old_parent = node->parent;
-    Leaf * merged = new Leaf(false, old_parent->parent);
+    Leaf * parent_left = dynamic_cast<Leaf *>(parent->left);
+    Leaf * parent_right = dynamic_cast<Leaf *>(parent->right);
+    if (parent_left == nullptr || parent_right == nullptr || parent_left->used || parent_right->used) {
+        return node;
+    }
 
-    if (old_parent->parent != nullptr) {
-        if (old_parent->parent->left == old_parent) {
-            old_parent->parent->left = merged;
+    Leaf * merged = new Leaf(false, parent->parent);
+
+    Internal * grandparent = dynamic_cast<Internal *>(parent->parent);
+
+    if (grandparent != nullptr) {
+        if (grandparent->left == parent) {
+            grandparent->left = merged;
         }
         else {
-            old_parent->parent->right = merged;
+            grandparent->right = merged;
         }
     }
     else {
         m_block_map_root.node = merged;
     }
 
-    delete old_parent;
+    delete parent;
 
     return merged;
 }
@@ -143,12 +182,30 @@ Leaf * PoolAllocator::try_merge_block(Leaf * node)
 Block PoolAllocator::find_by_offset(std::size_t target_offset, Block current)
 {
     assert(current.node != nullptr);
-    if (is_leaf(current.node)) {
+    if (dynamic_cast<Leaf *>(current.node) != nullptr) {
         assert(current.offset == target_offset);
         return current;
     }
-    if (target_offset >= current.offset + (1UL << (current.power - 1))) {
-        return find_by_offset(target_offset, {current.node->right, current.power - 1, current.offset + (1UL << (current.power - 1))});
+
+    Internal * node = dynamic_cast<Internal *>(current.node);
+    if (node == nullptr) {
+        throw std::logic_error("Got neither Leaf nor Node instance of Node");
     }
-    return find_by_offset(target_offset, {current.node->left, current.power - 1, current.offset});
+
+    if (target_offset >= current.offset + (1UL << (current.power - 1))) {
+        return find_by_offset(target_offset, {node->right, current.power - 1, current.offset + (1UL << (current.power - 1))});
+    }
+    return find_by_offset(target_offset, {node->left, current.power - 1, current.offset});
+}
+
+PoolAllocator::PoolAllocator(const unsigned min_p, const unsigned max_p)
+    : m_min_p(min_p)
+    , m_storage(1UL << max_p)
+    , m_block_map_root{new Leaf(false), max_p, 0}
+{
+}
+
+PoolAllocator::~PoolAllocator()
+{
+    delete m_block_map_root.node;
 }
